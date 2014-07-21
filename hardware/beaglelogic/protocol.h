@@ -1,5 +1,5 @@
 /*
- * This file is part of the libsigrok project.
+ * This file is part of the libsigrok and the BeagleLogic project.
  *
  * Copyright (C) 2014 Kumar Abhishek <abhishek@theembeddedkitchen.net>
  *
@@ -27,16 +27,41 @@
 
 #define LOG_PREFIX "beaglelogic"
 
+#define NUM_CHANNELS            14
+#define DEFAULT_SAMPLERATE      SR_MHZ(50)
+
+#define SAMPLEUNIT_TO_BYTES(x)	((x) == 1 ? 1 : 2)
+
 /** Private, per-device-instance driver context. */
 struct dev_context {
 	/* Model-specific information */
+	int max_channels;
+	uint32_t fw_ver;
 
-	/* Acquisition settings */
+	/* Acquisition settings: see beaglelogic.h */
+	uint64_t cur_samplerate;
+	uint64_t limit_samples;
+	uint32_t sampleunit;
+	uint32_t triggerflags;
+
+	/* Buffers: size of each buffer block and the total buffer area */
+	uint32_t bufunitsize;
+	uint32_t buffersize;
 
 	/* Operational state */
+	int fd;
+	GPollFD pollfd;
 
-	/* Temporary state across callbacks */
+	uint64_t bytes_read;
+	uint64_t sent_samples;
+	uint32_t offset;
+	uint8_t *sample_buf;	/* mmap'd kernel buffer here */
 
+	void *cb_data;
+
+	/* Trigger logic */
+	struct soft_trigger_logic *stl;
+	gboolean trigger_fired;
 };
 
 SR_PRIV int beaglelogic_receive_data(int fd, int revents, void *cb_data);
