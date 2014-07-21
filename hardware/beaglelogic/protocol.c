@@ -23,8 +23,9 @@
 #include <string.h>
 #include <unistd.h>
 
-/* sigrok-cli supports this at max */
-#define COPY_SIZE	(512 * 1024)
+/* Define data packet size independent of packet (bufunitsize bytes) size
+ * from the BeagleLogic kernel module */
+#define PACKET_SIZE	(512 * 1024)
 
 /* This implementation is zero copy from the libsigrok side.
  * It does not copy any data, just passes a pointer from the mmap'ed
@@ -39,23 +40,26 @@ SR_PRIV int beaglelogic_receive_data(int fd, int revents, void *cb_data)
 	struct sr_datafeed_logic logic;
 
 	int trigger_offset;
-	uint32_t copysize;
+	uint32_t packetsize;
+	uint64_t bytes_remaining;
 
 	if (!(sdi = cb_data) || !(devc = sdi->priv))
 		return TRUE;
 
-	copysize = COPY_SIZE;
-
+	packetsize = PACKET_SIZE;
 	logic.unitsize = SAMPLEUNIT_TO_BYTES(devc->sampleunit);
 
 	if (revents == G_IO_IN) {
 		sr_info("In callback G_IO_IN, offset=%d", devc->offset);
 
+		bytes_remaining = (devc->limit_samples * logic.unitsize) -
+				devc->bytes_read;
+
 		/* Configure data packet */
 		packet.type = SR_DF_LOGIC;
 		packet.payload = &logic;
 		logic.data = devc->sample_buf + devc->offset;
-		logic.length = MIN(copysize, devc->limit_samples * logic.unitsize - devc->bytes_read);
+		logic.length = MIN(packetsize, bytes_remaining);
 
 		if (devc->trigger_fired) {
 			/* Send the incoming transfer to the session bus. */
@@ -64,11 +68,12 @@ SR_PRIV int beaglelogic_receive_data(int fd, int revents, void *cb_data)
 			/* Check for trigger */
 			trigger_offset = soft_trigger_logic_check(devc->stl,
 						logic.data,
-						copysize);
+						packetsize);
 
 			if (trigger_offset > -1) {
 				trigger_offset *= logic.unitsize;
-				logic.length -= trigger_offset;
+				logic.length = MIN(packetsize - trigger_offset,
+						bytes_remaining);
 				logic.data += trigger_offset;
 
 				sr_session_send(devc->cb_data, &packet);
@@ -78,28 +83,27 @@ SR_PRIV int beaglelogic_receive_data(int fd, int revents, void *cb_data)
 		}
 
 		/* Move the read pointer forward */
-		lseek(fd, copysize, SEEK_CUR);
+		lseek(fd, packetsize, SEEK_CUR);
 
 		/* Update byte count and offset (roll over if needed) */
 		devc->bytes_read += logic.length;
-		if ((devc->offset += copysize) >= devc->buffersize) {
+		if ((devc->offset += packetsize) >= devc->buffersize) {
 			/* One shot capture, we abort and settle with less than
 			 * the required number of samples */
 			if (devc->triggerflags)
 				devc->offset = 0;
 			else
-				copysize = 0;
+				packetsize = 0;
 		}
-
 	}
 
 	/* EOF Received or we have reached the limit */
 	if (devc->bytes_read >= devc->limit_samples * logic.unitsize ||
-			copysize == 0) {
+			packetsize == 0) {
 		/* Send EOA Packet, stop polling */
 		packet.type = SR_DF_END;
 		packet.payload = NULL;
-		sr_session_send(sdi, &packet);
+		sr_session_send(devc->cb_data, &packet);
 
 		sr_session_source_remove_pollfd(&devc->pollfd);
 	}
