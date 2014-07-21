@@ -79,10 +79,8 @@ SR_PRIV int beaglelogic_receive_data(int fd, int revents, void *cb_data)
 			}
 		}
 
-		/* Dummy read the data into a null pointer. The kernel
-		 * module detects this and just updates its internal
-		 * read cursor for poll() to work properly */
-		read(fd, NULL, copysize);
+		/* Move the read pointer forward */
+		lseek(fd, copysize, SEEK_CUR);
 
 		/* Update byte count and offset (roll over if needed) */
 		devc->bytes_read += logic.length;
