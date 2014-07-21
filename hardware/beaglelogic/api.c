@@ -342,6 +342,10 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi,
 	/* Save user pointer */
 	devc->cb_data = cb_data;
 
+	/* Clear capture state */
+	devc->bytes_read = 0;
+	devc->offset = 0;
+
 	/* Configure channels */
 	devc->sampleunit = g_slist_length(sdi->channels) > 8 ?
 			BL_SAMPLEUNIT_16_BITS : BL_SAMPLEUNIT_8_BITS;
@@ -375,6 +379,9 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
 
 	/* Execute a stop on BeagleLogic */
 	beaglelogic_stop(devc);
+
+	/* lseek to offset 0, flushes the cache */
+	lseek(devc->fd, 0, SEEK_SET);
 
 	/* Remove session source and send EOT packet */
 	sr_session_source_remove_pollfd(&devc->pollfd);
