@@ -30,8 +30,6 @@
  * It does not copy any data, just passes a pointer from the mmap'ed
  * kernel buffers appropriately. It is up to the application which is
  * using libsigrok to decide how to deal with the data.
- *
- * TODO: Implement soft triggers
  */
 SR_PRIV int beaglelogic_receive_data(int fd, int revents, void *cb_data)
 {
