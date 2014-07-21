@@ -50,7 +50,7 @@ static const int32_t soft_trigger_matches[] = {
 	SR_TRIGGER_EDGE,
 };
 
-/* Channels are numbered 0-31 (on the PCB silkscreen). */
+/* Channels are numbered 0-13 */
 SR_PRIV const char *beaglelogic_channel_names[NUM_CHANNELS + 1] = {
 	"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12",
 	"13", NULL,
@@ -92,7 +92,7 @@ static GSList *scan(GSList *options)
 	struct sr_dev_inst *sdi;
 	struct dev_context *devc;
 	struct sr_channel *ch;
-	int i, fd, maxch;
+	int i, maxch;
 
 	(void)options;
 
@@ -104,15 +104,22 @@ static GSList *scan(GSList *options)
 	if (!g_file_test(BEAGLELOGIC_DEV_NODE, G_FILE_TEST_EXISTS))
 		return NULL;
 
-	/* Get a little information from BeagleLogic */
-	if ((fd = beaglelogic_open()) == -1)
-		return NULL;
-	beaglelogic_get_sampleunit(fd, (uint32_t *)&i);
-	beaglelogic_close(fd);
-	maxch = (i == BL_SAMPLEUNIT_8_BITS) ? 8 : NUM_CHANNELS;
-
 	sdi = sr_dev_inst_new(0, SR_ST_INACTIVE, NULL, "BeagleLogic", "1.0");
 	sdi->driver = di;
+
+	/* We need to test for number of channels by opening the node */
+	devc = beaglelogic_devc_alloc();
+
+	if (beaglelogic_open_nonblock(devc) != SR_OK) {
+		g_free(devc);
+		sr_dev_inst_free(sdi);
+
+		return NULL;
+	}
+	beaglelogic_get_sampleunit(devc);
+	beaglelogic_close(devc);
+
+	maxch = (devc->sampleunit == BL_SAMPLEUNIT_8_BITS) ? 8 : NUM_CHANNELS;
 
 	/* Signal */
 	sr_info("BeagleLogic device found at "BEAGLELOGIC_DEV_NODE);
@@ -125,10 +132,7 @@ static GSList *scan(GSList *options)
 		sdi->channels = g_slist_append(sdi->channels, ch);
 	}
 
-	/* Allocate the device context */
-	devc = beaglelogic_devc_alloc();
 	sdi->priv = devc;
-
 	drvc->instances = g_slist_append(drvc->instances, sdi);
 	devices = g_slist_append(devices, sdi);
 
@@ -147,34 +151,27 @@ static int dev_clear(void)
 
 static int dev_open(struct sr_dev_inst *sdi)
 {
-	int fd;
 	struct dev_context *devc = sdi->priv;
 
 	/* Open BeagleLogic */
-	fd = beaglelogic_open_nonblock();
-	if (fd == -1)
+	if (beaglelogic_open_nonblock(devc))
 		return SR_ERR;
 
 	/* Set fd and local attributes */
-	devc->fd = fd;
-	devc->pollfd.fd = fd;
+	devc->pollfd.fd = devc->fd;
 	devc->pollfd.events = G_IO_IN;
 
-	/* Get default attributes */
-	beaglelogic_get_samplerate(fd, (uint32_t *)&devc->cur_samplerate);
-	beaglelogic_get_sampleunit(fd, (void *)&devc->sampleunit);
-	beaglelogic_get_triggerflags(fd, &devc->triggerflags);
-	beaglelogic_get_buffersize(fd, &devc->buffersize);
-
-	/* Buffer size and sample limit */
-	devc->bufunitsize = beaglelogic_get_bufunitsize(fd);
-	devc->limit_samples =
-		devc->buffersize * SAMPLEUNIT_TO_BYTES(devc->sampleunit);
+	/* Get the default attributes */
+	beaglelogic_get_samplerate(devc);
+	beaglelogic_get_sampleunit(devc);
+	beaglelogic_get_triggerflags(devc);
+	beaglelogic_get_buffersize(devc);
+	beaglelogic_get_bufunitsize(devc);
 
 	/* Map the kernel capture FIFO for reads, saves 1 level of memcpy */
-	if ((devc->sample_buf = beaglelogic_mmap(fd)) == MAP_FAILED) {
+	if (beaglelogic_mmap(devc) != SR_OK) {
 		sr_err("Unable to map capture buffer");
-		beaglelogic_close(fd);
+		beaglelogic_close(devc);
 		return SR_ERR;
 	}
 
@@ -189,8 +186,8 @@ static int dev_close(struct sr_dev_inst *sdi)
 
 	if (sdi->status == SR_ST_ACTIVE) {
 		/* Close the memory mapping and the file */
-		beaglelogic_munmap(devc->fd, devc->sample_buf);
-		beaglelogic_close(devc->fd);
+		beaglelogic_munmap(devc);
+		beaglelogic_close(devc);
 	}
 	sdi->status = SR_ST_INACTIVE;
 	return SR_OK;
@@ -243,11 +240,6 @@ static int config_get(int key, GVariant **data, const struct sr_dev_inst *sdi,
 	return SR_OK;
 }
 
-/* Define maximum possible feasible buffer size on the BeagleBone Black
- * May be extended to >= 300 MB, but may leave system unstable
- * Change this to 128 MB if compiling for the BeagleBone White */
-#define MAX_MEM		(256 * 1024 * 1024)
-
 static int config_set(int key, GVariant *data, const struct sr_dev_inst *sdi,
 		const struct sr_channel_group *cg)
 {
@@ -260,49 +252,26 @@ static int config_set(int key, GVariant *data, const struct sr_dev_inst *sdi,
 
 	switch (key) {
 	case SR_CONF_SAMPLERATE:
-		tmp_u64 = g_variant_get_uint64(data);
-		if (beaglelogic_set_samplerate(devc->fd, tmp_u64))
-			return SR_ERR;
-		devc->cur_samplerate = tmp_u64;
-		break;
+		devc->cur_samplerate = g_variant_get_uint64(data);
+		return beaglelogic_set_samplerate(devc);
 
 	case SR_CONF_LIMIT_SAMPLES:
 		tmp_u64 = g_variant_get_uint64(data);
 		devc->limit_samples = tmp_u64;
+		devc->triggerflags = BL_TRIGGERFLAGS_ONESHOT;
 
 		/* Check if we have sufficient buffer size */
 		tmp_u64 *= SAMPLEUNIT_TO_BYTES(devc->sampleunit);
-		beaglelogic_set_triggerflags(devc->fd, BL_TRIGGERFLAGS_ONESHOT);
-#if 0
-		/* Try to allocate that buffer statically if possible. If not, then
-		 * set continous mode on and fall back to 64 MB buffers */
-		if (tmp_u64 <= MAX_MEM && devc->buffersize < tmp_u64) {
-			beaglelogic_munmap(devc->fd, devc->sample_buf);
-
-			if (beaglelogic_set_buffersize(devc->fd, tmp_u64)) {
-				/* Restore previous state */
-				beaglelogic_set_buffersize(devc->fd,
-						devc->buffersize);
-				beaglelogic_set_triggerflags(devc->fd,
-						BL_TRIGGERFLAGS_CONTINUOUS);
-				return SR_ERR;
-			}
-			/* Remap sample buffer */
-			devc->sample_buf = beaglelogic_mmap(devc->fd);
-			beaglelogic_get_buffersize(devc->fd, &devc->buffersize);
-
-		} else {
-			/* Use 64 MB buffers and continuous mode */
-			sr_warn("insufficient memory available, check kernel "\
-					"logs to see if any buffer was "\
-					"dropped during continuous acquisition.");
-
-			beaglelogic_set_buffersize(devc->fd, 64 * 1024 * 1024);
-			beaglelogic_set_triggerflags(devc->fd,
-					BL_TRIGGERFLAGS_CONTINUOUS);
+		if (tmp_u64 > devc->buffersize) {
+			sr_warn("Insufficient buffer space has been allocated.");
+			sr_warn("Please use \'echo <size in bytes> > "\
+				BEAGLELOGIC_SYSFS_ATTR(memalloc) \
+				"\' as root to increase the buffer size, this"\
+				" capture is now truncated to %d Msamples",
+				devc->buffersize /
+				(SAMPLEUNIT_TO_BYTES(devc->sampleunit) * 1000000));
 		}
-#endif
-		break;
+		return beaglelogic_set_triggerflags(devc);
 
 	default:
 		return SR_ERR_NA;
@@ -352,17 +321,15 @@ static int config_list(int key, GVariant **data, const struct sr_dev_inst *sdi,
 }
 
 /* get a sane timeout for poll() */
-#define BUFUNIT_TIMEOUT_MS(x)	(100 + (uint32_t)((x->bufunitsize * 1000) /  \
-					(x->cur_samplerate)))
+#define BUFUNIT_TIMEOUT_MS(devc)	(100 + ((devc->bufunitsize * 1000) / \
+				(uint32_t)(devc->cur_samplerate)))
 
 static int dev_acquisition_start(const struct sr_dev_inst *sdi,
 				    void *cb_data)
 {
 	(void)cb_data;
 	struct dev_context *devc = sdi->priv;
-	struct sr_channel *ch;
 	struct sr_trigger *trigger;
-	GSList *l;
 
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
@@ -371,16 +338,9 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi,
 	devc->cb_data = cb_data;
 
 	/* Configure channels */
-	beaglelogic_set_sampleunit(devc->fd, BL_SAMPLEUNIT_8_BITS);
-	for (l = sdi->channels; l; l = l->next) {
-		ch = l->data;
-		if (ch->index >= 8 && ch->enabled) {
-			beaglelogic_set_sampleunit(devc->fd,
-					BL_SAMPLEUNIT_16_BITS);
-			break;
-		}
-	}
-	beaglelogic_get_sampleunit(devc->fd, &devc->sampleunit);
+	devc->sampleunit = g_slist_length(sdi->channels) > 8 ?
+			BL_SAMPLEUNIT_16_BITS : BL_SAMPLEUNIT_8_BITS;
+	beaglelogic_set_sampleunit(devc);
 
 	/* Configure triggers & send header packet */
 	if ((trigger = sr_session_trigger_get())) {
@@ -391,8 +351,8 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi,
 	std_session_send_df_header(cb_data, LOG_PREFIX);
 
 	/* Trigger and add poll on file */
-	beaglelogic_start(devc->fd);
-	sr_session_source_add_pollfd(&devc->pollfd, -1,
+	beaglelogic_start(devc);
+	sr_session_source_add_pollfd(&devc->pollfd, BUFUNIT_TIMEOUT_MS(devc),
 			beaglelogic_receive_data, (void *)sdi);
 
 	return SR_OK;
@@ -409,7 +369,7 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
 		return SR_ERR_DEV_CLOSED;
 
 	/* Execute a stop on BeagleLogic */
-	beaglelogic_stop(devc->fd);
+	beaglelogic_stop(devc);
 
 	/* Remove session source and send EOT packet */
 	sr_session_source_remove_pollfd(&devc->pollfd);

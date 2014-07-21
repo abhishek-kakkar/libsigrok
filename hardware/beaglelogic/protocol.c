@@ -95,6 +95,7 @@ SR_PRIV int beaglelogic_receive_data(int fd, int revents, void *cb_data)
 
 	/* EOF Received or we have reached the limit */
 	if (devc->bytes_read >= devc->limit_samples * logic.unitsize ||
+			copysize == 0) {
 		/* Send EOA Packet, stop polling */
 		packet.type = SR_DF_END;
 		packet.payload = NULL;
