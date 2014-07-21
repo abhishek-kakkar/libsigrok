@@ -50,10 +50,11 @@ SR_PRIV int beaglelogic_receive_data(int fd, int revents, void *cb_data)
 
 	copysize = COPY_SIZE;
 
-	sr_info("In callback (), offset=%d", devc->offset);
 	logic.unitsize = SAMPLEUNIT_TO_BYTES(devc->sampleunit);
 
 	if (revents == G_IO_IN) {
+		sr_info("In callback G_IO_IN, offset=%d", devc->offset);
+
 		/* Configure data packet */
 		packet.type = SR_DF_LOGIC;
 		packet.payload = &logic;
