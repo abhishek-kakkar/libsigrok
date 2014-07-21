@@ -105,7 +105,7 @@ SR_PRIV int beaglelogic_receive_data(int fd, int revents, void *cb_data)
 		packet.payload = NULL;
 		sr_session_send(devc->cb_data, &packet);
 
-		sr_session_source_remove_pollfd(&devc->pollfd);
+		sr_session_source_remove_pollfd(sdi->session, &devc->pollfd);
 	}
 
 	return TRUE;

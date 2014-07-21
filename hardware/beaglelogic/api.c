@@ -352,7 +352,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi,
 	beaglelogic_set_sampleunit(devc);
 
 	/* Configure triggers & send header packet */
-	if ((trigger = sr_session_trigger_get())) {
+	if ((trigger = sr_session_trigger_get(sdi->session))) {
 		devc->stl = soft_trigger_logic_new(sdi, trigger);
 		devc->trigger_fired = FALSE;
 	} else
@@ -361,8 +361,9 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi,
 
 	/* Trigger and add poll on file */
 	beaglelogic_start(devc);
-	sr_session_source_add_pollfd(&devc->pollfd, BUFUNIT_TIMEOUT_MS(devc),
-			beaglelogic_receive_data, (void *)sdi);
+	sr_session_source_add_pollfd(sdi->session, &devc->pollfd,
+			BUFUNIT_TIMEOUT_MS(devc), beaglelogic_receive_data,
+			(void *)sdi);
 
 	return SR_OK;
 }
@@ -384,7 +385,7 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi, void *cb_data)
 	lseek(devc->fd, 0, SEEK_SET);
 
 	/* Remove session source and send EOT packet */
-	sr_session_source_remove_pollfd(&devc->pollfd);
+	sr_session_source_remove_pollfd(sdi->session, &devc->pollfd);
 	pkt.type = SR_DF_END;
 	pkt.payload = NULL;
 	sr_session_send(sdi, &pkt);
