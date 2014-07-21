@@ -1,5 +1,5 @@
 /*
- * This file is part of the libsigrok and the BeagleLogic project.
+ * This file is part of the libsigrok project.
  *
  * Copyright (C) 2014 Kumar Abhishek <abhishek@theembeddedkitchen.net>
  *
@@ -27,8 +27,8 @@
 
 #define LOG_PREFIX "beaglelogic"
 
+/* Maximum possible input channels */
 #define NUM_CHANNELS            14
-#define DEFAULT_SAMPLERATE      SR_MHZ(50)
 
 #define SAMPLEUNIT_TO_BYTES(x)	((x) == 1 ? 1 : 2)
 
@@ -51,6 +51,7 @@ struct dev_context {
 	/* Operational state */
 	int fd;
 	GPollFD pollfd;
+	int last_error;
 
 	uint64_t bytes_read;
 	uint64_t sent_samples;
