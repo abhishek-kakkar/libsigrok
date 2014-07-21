@@ -23,11 +23,6 @@
 SR_PRIV struct sr_dev_driver beaglelogic_driver_info;
 static struct sr_dev_driver *di = &beaglelogic_driver_info;
 
-/* Hardware options */
-static const int32_t hwopts[] = {
-	SR_CONF_CONN,
-};
-
 /* Hardware capabiities */
 static const int32_t hwcaps[] = {
 	SR_CONF_LOGIC_ANALYZER,
@@ -36,7 +31,6 @@ static const int32_t hwcaps[] = {
 
 	SR_CONF_LIMIT_SAMPLES,
 	SR_CONF_CONTINUOUS,
-	/* SR_CONF_EXTERNAL_CLOCK, TODO in a future BeagleLogic firmware */
 
 	SR_CONF_NUM_LOGIC_CHANNELS,
 };
@@ -52,8 +46,8 @@ static const int32_t soft_trigger_matches[] = {
 
 /* Channels are numbered 0-13 */
 SR_PRIV const char *beaglelogic_channel_names[NUM_CHANNELS + 1] = {
-	"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12",
-	"13", NULL,
+	"P8_45", "P8_46", "P8_43", "P8_44", "P8_41", "P8_42", "P8_39", "P8_40",
+	"P8_27", "P8_29", "P8_28", "P8_30", "P8_21", "P8_20", NULL,
 };
 
 /* Possible sample rates : 10 Hz to 100 MHz = (100 / x) MHz */
@@ -72,11 +66,8 @@ static struct dev_context * beaglelogic_devc_alloc(void)
 {
 	struct dev_context *devc;
 
-	/* Allocate the zeroed structure */
-	if (!(devc = g_try_malloc0(sizeof(*devc)))) {
-		sr_err("Device context alloc failed.");
-		return NULL;
-	}
+	/* Allocate zeroed structure */
+	devc = g_try_malloc0(sizeof(*devc));
 
 	/* Default non-zero values (if any) */
 	devc->fd = -1;
@@ -88,13 +79,12 @@ static struct dev_context * beaglelogic_devc_alloc(void)
 static GSList *scan(GSList *options)
 {
 	struct drv_context *drvc;
-	GSList *devices;
+	GSList *devices, *l;
+	struct sr_config *src;
 	struct sr_dev_inst *sdi;
 	struct dev_context *devc;
 	struct sr_channel *ch;
 	int i, maxch;
-
-	(void)options;
 
 	devices = NULL;
 	drvc = di->priv;
@@ -107,6 +97,14 @@ static GSList *scan(GSList *options)
 	sdi = sr_dev_inst_new(0, SR_ST_INACTIVE, NULL, "BeagleLogic", "1.0");
 	sdi->driver = di;
 
+	/* Unless explicitly specified, keep max channels to 8 only */
+	maxch = 8;
+	for (l = options; l; l = l->next) {
+		src = l->data;
+		if (src->key == SR_CONF_NUM_LOGIC_CHANNELS)
+			maxch = g_variant_get_int32(src->data);
+	}
+
 	/* We need to test for number of channels by opening the node */
 	devc = beaglelogic_devc_alloc();
 
@@ -116,10 +114,17 @@ static GSList *scan(GSList *options)
 
 		return NULL;
 	}
-	beaglelogic_get_sampleunit(devc);
-	beaglelogic_close(devc);
 
-	maxch = (devc->sampleunit == BL_SAMPLEUNIT_8_BITS) ? 8 : NUM_CHANNELS;
+	if (maxch > 8) {
+		maxch = NUM_CHANNELS;
+		devc->sampleunit = BL_SAMPLEUNIT_16_BITS;
+	} else {
+		maxch = 8;
+		devc->sampleunit = BL_SAMPLEUNIT_8_BITS;
+	}
+
+	beaglelogic_set_sampleunit(devc);
+	beaglelogic_close(devc);
 
 	/* Signal */
 	sr_info("BeagleLogic device found at "BEAGLELOGIC_DEV_NODE);
@@ -233,6 +238,10 @@ static int config_get(int key, GVariant **data, const struct sr_dev_inst *sdi,
 		*data = g_variant_new_uint64(devc->cur_samplerate);
 		break;
 
+	case SR_CONF_NUM_LOGIC_CHANNELS:
+		*data = g_variant_new_uint32(g_slist_length(sdi->channels));
+		break;
+
 	default:
 		return SR_ERR_NA;
 	}
@@ -293,10 +302,6 @@ static int config_list(int key, GVariant **data, const struct sr_dev_inst *sdi,
 
 	ret = SR_OK;
 	switch (key) {
-	case SR_CONF_SCAN_OPTIONS:
-		*data = g_variant_new_fixed_array(G_VARIANT_TYPE_INT32,
-				hwopts, ARRAY_SIZE(hwopts), sizeof(int32_t));
-		break;
 	case SR_CONF_DEVICE_OPTIONS:
 		*data = g_variant_new_fixed_array(G_VARIANT_TYPE_INT32,
 				hwcaps, ARRAY_SIZE(hwcaps), sizeof(int32_t));
